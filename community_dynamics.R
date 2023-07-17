@@ -10,6 +10,7 @@ library(ggforce)
 library(ggeffects)
 library(gridExtra)
 library(DescTools)
+library(report)
 
 # read in data
 bc = read.csv("df_dat.csv")
@@ -23,8 +24,10 @@ spp = c("AMBBIS", "EURQUA", "LITUTR", "ACRGRY", "PSEORN", "GASCAR", "BUFTER")
 bc = bc %>%
   filter((Species %in% spp)) %>%
   mutate(Species = factor(Species, levels = c("EURQUA", "AMBBIS", 
-                                              "PSEORN", "LITUTR", "GASCAR", "BUFTER", "ACRGRY"))) %>%
+                                              "LITUTR", "PSEORN", "GASCAR", "BUFTER", "ACRGRY"))) %>%
   droplevels()
+
+levels(bc$Species) = c("E. quadridigitata", "A. bishopi", "L. sphenocephalus", "P. ornata", "G. carolinensis", "A. terrestris", "A. gryllus")
 
 
 pdf(file = "fig1.pdf", width = 8, height = 8)
@@ -38,13 +41,86 @@ ggplot(bc, aes(Species, Date)) +
   theme_pubclean()+ 
   theme(legend.position = "none") +
   theme(axis.text=element_text(size=12), axis.title=element_text(size=14,face="bold")) +
-  geom_hline(yintercept = 2) 
+  geom_hline(yintercept = 2) + theme(axis.text.y = element_text(face = "italic")) 
 
 dev.off()
 
 
-# calculate abundance for eachspecies in each year 
-abs = aggregate(Date~Season + Species, bc, length)
+#bc$mon = month(bc$Date, label = T, abbr = T)
+
+# calculate abundance for each species in each month in each year 
+#mon.counts = aggregate(Date ~ Season + mon + Species, bc, length)
+#mons = month.abb
+
+#mon.counts = mon.counts %>%
+#  complete(mon = month.abb, nesting(Season, Species), fill = list(Date = 0)) 
+
+#mon.counts$mon = factor(mon.counts$mon, levels = month.abb)
+
+#ggplot(mon.counts, aes(x = mon, y = Date, fill = Species)) +
+#  geom_col(position = "dodge") +
+#  coord_polar() + 
+#  ylim(-100, 450) +
+#  facet_wrap(~Season) +
+# theme_pubclean() +
+#  scale_fill_brewer(palette="Dark2")
+
+
+library(circular)
+
+bc$degrees <- as.numeric(strftime(bc$Date, format = "%j"))/366*360 # convert year to 360 degrees
+
+bc$circ <- circular(bc$degrees, units="degrees", template="geographics")
+
+# Plot the results
+plot(bc$circ, stack=TRUE, axes=FALSE)
+axis <- circular(c(0, 90, 180, 270), units="degrees", template="geographics")
+axis.circular(at=axis, labels=c("Jan", "April", "July", "October"),
+              template="geographics", zero=0, tcl.text=.15)
+arrows.circular(quantile(bc$circ, prob=c(.10, .90)), lwd=2)
+
+# circular regression
+#preds = cbind(factor(bc$Season-2010), factor(bc$Species))
+#mcl <- lm.circular(y = bc$circ, x = preds, init=c(0,0), type="c-l", tol = 1e-4, verbose=T)
+#mcl
+
+library(bpnreg)
+m1 = bpnr(circ ~ factor(Season) * factor(Species), data = bc, its = 1000, burn = 500)
+m1
+fit(m1)
+
+m2 = bpnr(circ ~ factor(Season), data = bc, its = 1000, burn = 500)
+m3 = bpnr(circ ~ factor(Species), data = bc, its = 1000, burn = 500)
+m4 = bpnr(circ ~ 1, data = bc, its = 1000, burn = 500)
+m5 = bpnr(circ ~ factor(Season) + factor(Species), data = bc, its = 1000, burn = 500)
+
+fit(m1) # full model is the best
+fit(m2)
+fit(m3)
+fit(m4)
+fit(m5)
+
+
+# calculate abundance for each species in each month in each year 
+day.counts = aggregate(Date ~ Species + Season + degrees, bc, length)
+
+# extract predicted means from regression
+preds = cbind(m1$lin.coef.I, m1$lin.coef.II)
+write.csv(preds, "circular_m1_posts.csv")
+
+g1 = ggplot(day.counts, aes(x = degrees, y = log(Date), fill = Species)) +
+  geom_col(position = "dodge") +
+  coord_polar() + 
+  ylim(-5, 5) +
+  facet_wrap(~Season) +
+  theme_pubclean() +
+  scale_fill_brewer(palette="Dark2")
+
+ggsave("sal_circles.pdf", g1, device = cairo_pdf, width = 16, height = 12)
+
+###################################################
+# calculate abundance for each species in each year 
+abs = aggregate(Date ~ Season + Species, bc, length)
 
 abs = abs %>%
   spread(Species, Date)
@@ -54,15 +130,21 @@ abundances = as.matrix(abs[,-1])
 # scale by sampling days
 samp.days = c(150, 135, 255, 195, 165, 100)
 BCI = abundances / samp.days
-
+rowSums(abundances)/samp.days
 # convert abundances to biomass using mass estimates from literature
-mass = rev(c(ACRGRY = 0.45, BUFTER = 19, GASCAR = 1, LITUTR = 22, PSEORN = 5, AMBBIS = 6, EURQUA = 0.75))
+mass = rev(c(ACRGRY = 0.45, BUFTER = 19, GASCAR = 1, PSEORN = 5, LITUTR = 22, AMBBIS = 6, EURQUA = 0.75))
 BCI = t(t(BCI) * mass)
 biomass = rowSums(BCI)
+
+# dominance proportions
+BCI/biomass
+
 
 ##################
 # Evenness metrics
 ##################
+
+abundances = abundances[,c(2,5,7,10,13,14,29,33,36,37,38,39,42,44,51,52,53,54,55,56,59,62)]
 
 ## Unbiased Simpson (Hurlbert 1971, eq. 5) with rarefy:
 unbias.simp <- rarefy(abundances, 2) - 1
@@ -74,6 +156,7 @@ simp <- diversity(BCI, "simpson")
 invsimp <- diversity(BCI, "inv")
 
 ## Species richness (S), Sannon's diversity index (H), and Pielou's evenness (J):
+BCI[is.na(BCI)] = 0
 S <- specnumber(BCI)
 H <- diversity(BCI)
 J <- H/log(S)
@@ -86,15 +169,15 @@ J <- H/log(S)
 add.label <- function(label, ...) legend("topleft", legend=" ", title=label,
                                          bty='n', ...)
 
+
+pdf(file = "fig3.pdf", width = 9, height = 8)
+
 par(mfrow = c(2,1), cex.main = 1.5, mar = c(4, 6, 1, 2) + 0.1, mgp = c(3.5, 1, 0), cex.lab = 1.5, 
-    font.lab = 2, cex.axis = 1.3, bty = "n", las = 1)
+    font.lab = 2, cex.axis = 1, bty = "n", las = 1)
 
 digitsize <- 1.2
 x <- c(1:6)
-seas = c("11-12", "12-13", "13-14", "14-15", "15-16", "16-17")
-
-
-pdf(file = "fig3.pdf", width = 8, height = 8)
+seas = c("2011-2012", "2012-2013", "2013-2014", "2014-2015", "2015-2016", "2016-2017")
 
 plot(x, rep(-10000, 6), type = "p", ylab = " ", 
      xlab = " ", cex = 1.5, ylim = c(0, 140), xlim = c(1, 7), lwd = 2, pch = 5, 
@@ -131,15 +214,16 @@ dev.off()
 # read in dates for the 75%  threshold of population movement
 dat = read.csv("75_arrivals.csv")
 #dat = read.csv("50_arrivals.csv") # same result with 50% threshold
-dat = read.csv("90_arrivals.csv") # same result with 90% threshold
+#dat = read.csv("90_arrivals.csv") # same result with 90% threshold
 
 dat = dat %>%
   mutate(Species = factor(Species, levels = c("EURQUA", "AMBBIS", 
-                                              "PSEORN", "LITUTR", "GASCAR", "BUFTER", "ACRGRY"))) %>%
+                                              "LITUTR", "PSEORN", "GASCAR", "BUFTER", "ACRGRY"))) %>%
   droplevels()
 
+levels(dat$Species) = c("E. quadridigitata", "A. bishopi", "R. sphenocephalus", "P. ornata", "G. carolinensis", "A. terrestris", "A. gryllus")
 # extract Julian day
-dat$day.75 = as.numeric(format(as.Date(dat$Date.90)-180, "%j"))
+dat$day.75 = as.numeric(format(as.Date(dat$Date.75)-180, "%j"))
 
 # friedman test (non-parametric equivalent of repeated measure anova)
 res.fried <- dat %>% friedman_test(day.75 ~ Season | Species)
@@ -162,6 +246,28 @@ bxp = ggboxplot(dat, x = "Season", y = "day.75") +
 
 ggsave(filename = "fig2.pdf", bxp, device = cairo_pdf, width = 8, height = 6, units = "in", dpi = 600) 
 
+
+# Libraries
+library(GGally)
+
+# Data set is provided by R natively
+data = spread(dat[,-c(1,4)], key = Season, value = day.75)
+
+# Plot
+p1 = ggparcoord(data, columns = 2:7, groupColumn = 1, 
+                scale="globalminmax", showPoints = TRUE, alphaLines = 0.7)
+
+p1 = p1 + xlab("Season") + ylab("") + 
+  labs(subtitle = get_test_label(res.fried,  detailed = TRUE)) + 
+  theme(legend.position = "bottom", legend.title = element_blank()) +
+  scale_x_discrete(breaks = c("2", "3", "4", "5", "6", "7"), labels = c("2011-2012", "2012-2013", "2013-2014", "2014-2015", "2015-2016", "2016-2017")) +
+  scale_y_continuous(breaks = c(125, 155, 186, 217, 245, 276, 306), labels = c("Nov 1", "Dec 1", "Jan 1", "Feb 1", "Mar 1", "Apr 1", "May 1")) +
+  color_palette("Dark2") + 
+  guides(colour = guide_legend(reverse = T)) + 
+  theme_Publication() +
+  theme(legend.position=c(.15,.85))
+
+ggsave(filename = "fig2.pdf", p1, device = cairo_pdf, width = 8, height = 6, units = "in", dpi = 600) 
 
 ####################
 # hydroperiod analysis
@@ -187,12 +293,12 @@ theme_Publication <- function(base_size=14, base_family="helvetica") {
             panel.grid.major = element_blank(),
             panel.grid.minor = element_blank(),
             legend.key = element_rect(colour = NA),
-            legend.position = "top",
-            legend.direction = "horizontal",
+            legend.position = "right",
+            legend.direction = "vertical",
             legend.key.size= unit(0.2, "cm"),
             legend.margin = margin(0.1,0.1,0.1,0.1, "cm"),
             legend.title = element_blank(),
-            legend.text=element_text(size=10),
+            legend.text=element_text(size=12, face = "italic"),
             plot.margin = margin(0.2,0.2,0.2,0.2, "cm"),
             strip.background=element_rect(colour="#f0f0f0",fill="#f0f0f0"),
             strip.text = element_text(face="bold")
@@ -226,8 +332,10 @@ ab.dat = ab.dat[order(ab.dat$hy),]
 ab.dat = data.frame(hy = rep(ab.dat$hy, 7), gather(ab.dat[,2:8]))
 
 ab.dat = ab.dat %>%
-  mutate(key = factor(key, levels = c("EURQUA", "AMBBIS", 
-                                      "PSEORN", "LITUTR", "GASCAR", "BUFTER", "ACRGRY")))
+  mutate(key = factor(key, levels = c("E..quadridigitata", "A..bishopi", 
+                                      "L..sphenocephalus", "P..ornata", "G..carolinensis", "A..terrestris", "A..gryllus")))
+
+levels(ab.dat$key) = c("E. quadridigitata", "A. bishopi", "R. sphenocephalus", "P. ornata", "G. carolinensis", "A. terrestris", "A. gryllus")
 
 
 mod1 = lmer(log(value) ~ hy + (1|key), data = ab.dat)
@@ -239,7 +347,8 @@ g1 = plot(p1) +
   xlab("") + 
   ggtitle("") +
   ylab(expression(paste("Biomass (g ", day^-1,")"))) +
-  scale_color_brewer(palette="Dark2")+ guides(colour = guide_legend(nrow = 1, reverse = T))
+  scale_color_brewer(palette="Dark2")+ guides(colour = guide_legend(reverse = T)) +
+  theme(legend.position=c(.2,.85))
 
 
 #########################
@@ -254,26 +363,33 @@ dat$delta.day = (dat$day.90 - dat$day.50) + 1
 hy.dat = data.frame(hy, Season = 1:6)
 dat.delta = merge(dat, hy.dat, by = "Season")
 
+dat.delta = dat.delta %>%
+  mutate(Species = factor(Species, levels = c("EURQUA", "AMBBIS", 
+                                              "RANUTR", "PSEORN", "GASCAR", "BUFTER", "ACRGRY")))
+
+levels(dat.delta$Species) = c("E. quadridigitata", "A. bishopi", "R. sphenocephalus", "P. ornata", "G. carolinensis", "A. terrestris", "A. gryllus")
+
+
 mod2 = lmer(log(delta.day) ~ log(hy) + (1|Species), data = dat.delta)
 
 p2 = ggpredict(mod2, terms = c("hy", "Species"), type = "re", ci.lvl = 0) 
 
 g2 = plot(p2) +
   theme_Publication() + 
-  xlab("") + 
+  xlab("Hydroperiod (days)") + 
   ggtitle("") +
   ylab(expression(paste(Delta, " days (intraspecific)"))) +
-  scale_color_brewer(palette="Dark2")+ guides(colour = guide_legend(nrow = 1, reverse = T))
+  scale_color_brewer(palette="Dark2")+ guides(colour = guide_legend(reverse = T)) +
+  theme(legend.position="none")
 
 
 gg = ggarrange(g1, g2, 
               labels = c("A", "B"),
               ncol = 1, nrow = 2,
-              common.legend = TRUE, 
-              legend = "top")
+              common.legend = F)
 
 
-ggsave(filename = "ggfig4.pdf", plot = p, device = cairo_pdf, width = 6, height = 8, units = "in")
+ggsave(filename = "ggfig4.pdf", plot = gg, device = cairo_pdf, width = 6, height = 8, units = "in")
 
 #########################
 # interspecific synchrony
