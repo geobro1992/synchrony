@@ -1,6 +1,8 @@
 # Niche partitioning and a storage effect facilitate coexistence in an amphibian community
 Pond-breeding amphibians that utilise ephemeral wetlands provide an excellent opportunity to evaluate theoretical predictions of community composition in stochastic environments. Here, we explore the interplay between biotic and abiotic conditions in shaping amphibian communities at two ephemeral wetlands on Eglin Air Force Base, Florida.
 
+We completely encircled two wetlands with drift fences and funnel traps and recorded all amphibian movements. We recorded the dates when 50%, 75%, and 90% of individuals had arrived and used these point estimates to relate differences in the timing of movements to environmental covariates.
+
 ## Contents
 **df_dat.csv** contains the raw drift fence captures.
 
