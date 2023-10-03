@@ -11,6 +11,8 @@ library(ggeffects)
 library(gridExtra)
 library(DescTools)
 library(report)
+library(circular)
+library(bpnreg)
 
 # read in data
 bc = read.csv("df_dat.csv")
@@ -65,9 +67,6 @@ dev.off()
 # theme_pubclean() +
 #  scale_fill_brewer(palette="Dark2")
 
-
-library(circular)
-
 bc$degrees <- as.numeric(strftime(bc$Date, format = "%j"))/366*360 # convert year to 360 degrees
 
 bc$circ <- circular(bc$degrees, units="degrees", template="geographics")
@@ -84,39 +83,43 @@ arrows.circular(quantile(bc$circ, prob=c(.10, .90)), lwd=2)
 #mcl <- lm.circular(y = bc$circ, x = preds, init=c(0,0), type="c-l", tol = 1e-4, verbose=T)
 #mcl
 
-library(bpnreg)
+# perform regression comparison
 m1 = bpnr(circ ~ factor(Season) * factor(Species), data = bc, its = 1000, burn = 500)
-m1
-fit(m1)
-
 m2 = bpnr(circ ~ factor(Season), data = bc, its = 1000, burn = 500)
 m3 = bpnr(circ ~ factor(Species), data = bc, its = 1000, burn = 500)
 m4 = bpnr(circ ~ 1, data = bc, its = 1000, burn = 500)
 m5 = bpnr(circ ~ factor(Season) + factor(Species), data = bc, its = 1000, burn = 500)
 
+
+# compare model fit
 fit(m1) # full model is the best
 fit(m2)
 fit(m3)
 fit(m4)
 fit(m5)
 
+# extract model coefficients
+m1
+preds = m1$circ.coef.cat
+
 
 # calculate abundance for each species in each month in each year 
 day.counts = aggregate(Date ~ Species + Season + degrees, bc, length)
 
-# extract predicted means from regression
-preds = cbind(m1$lin.coef.I, m1$lin.coef.II)
-write.csv(preds, "circular_m1_posts.csv")
-
 g1 = ggplot(day.counts, aes(x = degrees, y = log(Date), fill = Species)) +
   geom_col(position = "dodge") +
+  xlab("") + ylab("") +
   coord_polar() + 
   ylim(-5, 5) +
   facet_wrap(~Season) +
   theme_pubclean() +
-  scale_fill_brewer(palette="Dark2")
+  scale_fill_brewer(palette="Dark2") +
+  labs(caption = "Figure S1. Radial plot of species arrival times over the six years of drift-fence monitoring. \nDay of year has been converted to degrees such that January 1st equals 1 and December 31st equals 360. \nHeights of bars are scaled to the number of individuals captured per day.") +
+  theme(plot.caption = element_text(hjust=0, size=rel(1.4)))
+
 
 ggsave("sal_circles.pdf", g1, device = cairo_pdf, width = 16, height = 12)
+
 
 ###################################################
 # calculate abundance for each species in each year 
